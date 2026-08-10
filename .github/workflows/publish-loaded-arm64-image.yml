@@ -1,0 +1,50 @@
+name: Publish prebuilt ARM64 image
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: GitHub release containing the compressed docker-save archive
+        required: true
+      asset_name:
+        description: Compressed docker-save archive name
+        required: true
+      image_tag:
+        description: Full ghcr.io image tag already embedded in the archive
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download image archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          ASSET_NAME: ${{ inputs.asset_name }}
+        run: gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ASSET_NAME"
+
+      - name: Load and validate ARM64 image
+        env:
+          ASSET_NAME: ${{ inputs.asset_name }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          gzip -dc "$ASSET_NAME" | docker load
+          test "$(docker image inspect "$IMAGE_TAG" --format '{{.Architecture}}')" = arm64
+          test "${IMAGE_TAG#ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/}" != "$IMAGE_TAG"
+
+      - name: Authenticate to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Push image
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: docker push "$IMAGE_TAG"
