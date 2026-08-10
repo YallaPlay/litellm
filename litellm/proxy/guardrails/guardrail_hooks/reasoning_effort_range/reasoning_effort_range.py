@@ -129,13 +129,13 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
         if thinking_type == "adaptive":
             output_config_value = data.get("output_config")
             if output_config_value is None:
-                return "medium"
+                return None
             if not isinstance(output_config_value, dict):
                 self._raise("output_config must be an object")
             output_config = cast(Mapping[str, object], output_config_value)
             effort = output_config.get("effort")
             if effort is None:
-                return "medium"
+                return None
             if not isinstance(effort, str) or effort not in REQUEST_EFFORT_RANK:
                 self._raise(f"reasoning effort must be one of {EFFORT_NAMES}")
             return effort
@@ -195,6 +195,31 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
 
         data["reasoning_effort"] = self.default_effort
 
+    def _set_adaptive_effort(
+        self,
+        data: Dict[str, object],
+        call_type: CallTypesLiteral,
+        requested_effort: str,
+    ) -> None:
+        """Make an allowed effort explicit when adaptive thinking would otherwise choose it."""
+        if call_type not in ANTHROPIC_MESSAGE_CALL_TYPES:
+            return
+        thinking_value = data.get("thinking")
+        if not isinstance(thinking_value, dict):
+            return
+        thinking = cast(Mapping[str, object], thinking_value)
+        if thinking.get("type") != "adaptive":
+            return
+        output_config_value = data.get("output_config")
+        if output_config_value is None:
+            output_config: Dict[str, object] = {}
+            data["output_config"] = output_config
+        elif isinstance(output_config_value, dict):
+            output_config = cast(Dict[str, object], output_config_value)
+        else:
+            self._raise("output_config must be an object")
+        output_config.setdefault("effort", requested_effort)
+
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -216,4 +241,5 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
             self._raise(f"reasoning effort '{requested_effort}' is not allowed; minimum allowed is {self.min_effort}")
         if rank > EFFORT_RANK[self.max_effort]:
             self._raise(f"reasoning effort '{requested_effort}' is not allowed; maximum allowed is {self.max_effort}")
+        self._set_adaptive_effort(data, call_type, requested_effort)
         return data

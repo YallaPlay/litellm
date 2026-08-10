@@ -122,6 +122,31 @@ async def test_defaults_omitted_anthropic_effort() -> None:
 
 
 @pytest.mark.asyncio
+async def test_defaults_adaptive_thinking_without_explicit_effort() -> None:
+    guardrail: ReasoningEffortRangeGuardrail = make_guardrail()
+    data = {"model": "gpt-5.6-sol", "thinking": {"type": "adaptive"}}
+
+    result = await guardrail.async_pre_call_hook(None, None, data, "anthropic_messages")
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["output_config"] == {"effort": "medium"}
+
+
+@pytest.mark.asyncio
+async def test_materializes_scalar_effort_for_adaptive_thinking() -> None:
+    guardrail: ReasoningEffortRangeGuardrail = make_guardrail()
+    data = {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "low",
+        "thinking": {"type": "adaptive"},
+    }
+
+    result = await guardrail.async_pre_call_hook(None, None, data, "anthropic_messages")
+
+    assert result["output_config"] == {"effort": "low"}
+
+
+@pytest.mark.asyncio
 async def test_fails_closed_on_conflicting_or_malformed_values() -> None:
     guardrail = make_guardrail()
 
