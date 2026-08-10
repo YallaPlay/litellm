@@ -163,6 +163,34 @@ async def test_rejects_null_adaptive_output_effort(reasoning_effort: str | None)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("output_effort", [None, "high"])
+async def test_rejects_enabled_thinking_output_effort_bypass(output_effort: str | None) -> None:
+    guardrail = make_guardrail()
+    data = {
+        "model": "gpt-5.6-sol",
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+        "output_config": {"effort": output_effort},
+    }
+
+    with pytest.raises(Exception):
+        await guardrail.async_pre_call_hook(None, None, data, "anthropic_messages")
+
+
+@pytest.mark.asyncio
+async def test_accepts_matching_enabled_thinking_output_effort() -> None:
+    guardrail = make_guardrail()
+    data = {
+        "model": "gpt-5.6-sol",
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+        "output_config": {"effort": "low"},
+    }
+
+    result = await guardrail.async_pre_call_hook(None, None, data, "anthropic_messages")
+
+    assert result["output_config"] == {"effort": "low"}
+
+
+@pytest.mark.asyncio
 async def test_fails_closed_on_conflicting_or_malformed_values() -> None:
     guardrail = make_guardrail()
 
