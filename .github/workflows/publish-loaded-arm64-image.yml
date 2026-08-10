@@ -58,4 +58,4 @@ jobs:
         run: |
           pinned_asset="registry-${ASSET_NAME}"
           docker save "$IMAGE_TAG" | gzip -1 > "$pinned_asset"
-          gh release upload "$RELEASE_TAG" "$pinned_asset" --clobber
+          gh release upload "$RELEASE_TAG" "$pinned_asset" --repo "$GITHUB_REPOSITORY" --clobber
