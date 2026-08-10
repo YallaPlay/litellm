@@ -14,7 +14,7 @@ on:
         required: true
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -48,3 +48,14 @@ jobs:
         env:
           IMAGE_TAG: ${{ inputs.image_tag }}
         run: docker push "$IMAGE_TAG"
+
+      - name: Preserve registry-pinned image archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          ASSET_NAME: ${{ inputs.asset_name }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          pinned_asset="registry-${ASSET_NAME}"
+          docker save "$IMAGE_TAG" | gzip -1 > "$pinned_asset"
+          gh release upload "$RELEASE_TAG" "$pinned_asset" --clobber
