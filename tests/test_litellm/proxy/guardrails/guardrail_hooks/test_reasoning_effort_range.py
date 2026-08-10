@@ -219,6 +219,40 @@ async def test_fails_closed_on_conflicting_or_malformed_values() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "value",
+    [None, {}, {"effort": None}, True, 3, [], "bogus"],
+)
+async def test_rejects_malformed_chat_effort(value: object) -> None:
+    guardrail = make_guardrail()
+
+    with pytest.raises(Exception):
+        await guardrail.async_pre_call_hook(
+            None,
+            None,
+            {"model": "gpt-5.6-sol", "reasoning_effort": value},
+            "acompletion",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "thinking",
+    [None, {}, {"budget_tokens": 1024}, {"type": "enabled"}],
+)
+async def test_rejects_malformed_thinking(thinking: object) -> None:
+    guardrail = make_guardrail()
+
+    with pytest.raises(Exception):
+        await guardrail.async_pre_call_hook(
+            None,
+            None,
+            {"model": "gpt-5.6-sol", "thinking": thinking},
+            "anthropic_messages",
+        )
+
+
+@pytest.mark.asyncio
 async def test_fails_closed_when_attached_to_another_model() -> None:
     guardrail = make_guardrail()
 

@@ -101,28 +101,31 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
             should_wrap_with_default_message=False,
         )
 
-    def _append_effort(self, values: List[str], value: object) -> None:
+    def _append_effort(self, values: List[str], value: object, field: str) -> None:
         if isinstance(value, dict):
-            value = cast(Mapping[str, object], value).get("effort")
-        if value is None:
-            return
+            structured_value = cast(Mapping[str, object], value)
+            if "effort" not in structured_value:
+                self._raise(f"{field}.effort is required")
+            value = structured_value["effort"]
         if not isinstance(value, str) or value not in REQUEST_EFFORT_RANK:
             self._raise(f"reasoning effort must be one of {EFFORT_NAMES}")
         values.append(value)
 
     def _thinking_effort(self, data: Dict[str, object]) -> Optional[str]:
-        thinking_value = data.get("thinking")
-        if thinking_value is None or thinking_value == {}:
+        if "thinking" not in data:
             return None
+        thinking_value = data["thinking"]
         if not isinstance(thinking_value, dict):
             self._raise("thinking must be an object")
         thinking = cast(Mapping[str, object], thinking_value)
 
-        thinking_type = thinking.get("type", "disabled")
+        thinking_type = thinking.get("type")
         if thinking_type == "disabled":
             return "none"
         if thinking_type == "enabled":
-            budget_tokens = thinking.get("budget_tokens", 0)
+            if "budget_tokens" not in thinking:
+                self._raise("thinking.budget_tokens is required when thinking is enabled")
+            budget_tokens = thinking["budget_tokens"]
             if isinstance(budget_tokens, bool) or not isinstance(budget_tokens, int) or budget_tokens < 0:
                 self._raise("thinking.budget_tokens must be a non-negative integer")
             return reasoning_effort_from_thinking_budget(budget_tokens)
@@ -146,14 +149,16 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
 
     def _requested_effort(self, data: Dict[str, object], call_type: CallTypesLiteral) -> Optional[str]:
         values: List[str] = []
-        self._append_effort(values, data.get("reasoning_effort"))
+        if "reasoning_effort" in data:
+            self._append_effort(values, data["reasoning_effort"], "reasoning_effort")
 
-        reasoning_value = data.get("reasoning")
-        if reasoning_value is not None:
+        if "reasoning" in data:
+            reasoning_value = data["reasoning"]
             if not isinstance(reasoning_value, dict):
                 self._raise("reasoning must be an object")
             reasoning = cast(Mapping[str, object], reasoning_value)
-            self._append_effort(values, reasoning.get("effort"))
+            if "effort" in reasoning:
+                self._append_effort(values, reasoning["effort"], "reasoning")
 
         thinking_effort = self._thinking_effort(data)
         if thinking_effort is not None:
