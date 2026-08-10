@@ -117,6 +117,7 @@ class SupportedGuardrailIntegrations(Enum):
     QUALIFIRE = "qualifire"
     CUSTOM_CODE = "custom_code"
     OVALIX = "ovalix"
+    REASONING_EFFORT_RANGE = "reasoning_effort_range"
     MICROSOFT_PURVIEW = "microsoft_purview"
     SEMANTIC_GUARD = "semantic_guard"
     MCP_END_USER_PERMISSION = "mcp_end_user_permission"
@@ -792,6 +793,11 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default=None,
         description="Optional field if guardrail requires a 'model' parameter",
     )
+
+    # reasoning effort range params
+    min_effort: Optional[Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]] = None
+    max_effort: Optional[Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]] = None
+    default_effort: Optional[Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]] = None
 
     violation_message_template: Optional[str] = Field(
         default=None,
