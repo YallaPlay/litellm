@@ -133,9 +133,9 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
             if not isinstance(output_config_value, dict):
                 self._raise("output_config must be an object")
             output_config = cast(Mapping[str, object], output_config_value)
-            effort = output_config.get("effort")
-            if effort is None:
+            if "effort" not in output_config:
                 return None
+            effort = output_config["effort"]
             if not isinstance(effort, str) or effort not in REQUEST_EFFORT_RANK:
                 self._raise(f"reasoning effort must be one of {EFFORT_NAMES}")
             return effort
