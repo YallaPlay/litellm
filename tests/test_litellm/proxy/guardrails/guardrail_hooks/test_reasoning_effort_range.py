@@ -133,6 +133,34 @@ async def test_defaults_adaptive_thinking_without_explicit_effort() -> None:
 
 
 @pytest.mark.asyncio
+async def test_defaults_passthrough_adaptive_thinking_without_explicit_effort() -> None:
+    guardrail: ReasoningEffortRangeGuardrail = make_guardrail()
+    data = {"model": "gpt-5.6-sol", "thinking": {"type": "adaptive"}}
+
+    result = await guardrail.async_pre_call_hook(None, None, data, "pass_through_endpoint")
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["output_config"] == {"effort": "medium"}
+
+
+@pytest.mark.asyncio
+async def test_rejects_passthrough_null_adaptive_effort() -> None:
+    guardrail: ReasoningEffortRangeGuardrail = make_guardrail()
+
+    with pytest.raises(Exception):
+        await guardrail.async_pre_call_hook(
+            None,
+            None,
+            {
+                "model": "gpt-5.6-sol",
+                "thinking": {"type": "adaptive"},
+                "output_config": {"effort": None},
+            },
+            "pass_through_endpoint",
+        )
+
+
+@pytest.mark.asyncio
 async def test_materializes_scalar_effort_for_adaptive_thinking() -> None:
     guardrail: ReasoningEffortRangeGuardrail = make_guardrail()
     data = {

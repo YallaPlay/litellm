@@ -150,6 +150,13 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
             self._raise(f"reasoning effort must be one of {EFFORT_NAMES}")
         return effort
 
+    @staticmethod
+    def _uses_anthropic_effort_shape(data: Mapping[str, object], call_type: CallTypesLiteral) -> bool:
+        if call_type in ANTHROPIC_MESSAGE_CALL_TYPES or "thinking" in data:
+            return True
+        output_config = data.get("output_config")
+        return isinstance(output_config, Mapping) and "effort" in output_config
+
     def _requested_effort(self, data: Dict[str, object], call_type: CallTypesLiteral) -> Optional[str]:
         values: List[str] = []
         if "reasoning_effort" in data:
@@ -167,7 +174,7 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
         if thinking_effort is not None:
             values.append(thinking_effort)
 
-        if call_type in ANTHROPIC_MESSAGE_CALL_TYPES:
+        if self._uses_anthropic_effort_shape(data, call_type):
             output_config_effort = self._output_config_effort(data)
             if output_config_effort is not None:
                 values.append(output_config_effort)
@@ -179,8 +186,16 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
         return values[0]
 
     def _set_default_effort(self, data: Dict[str, object], call_type: CallTypesLiteral) -> None:
-        if call_type in ANTHROPIC_MESSAGE_CALL_TYPES:
-            data["thinking"] = {"type": "adaptive"}
+        if self._uses_anthropic_effort_shape(data, call_type):
+            thinking_value = data.get("thinking")
+            if thinking_value is None:
+                data["thinking"] = {"type": "adaptive"}
+            elif not isinstance(thinking_value, dict):
+                self._raise("thinking must be an object")
+            else:
+                thinking = cast(Mapping[str, object], thinking_value)
+                if thinking.get("type") != "adaptive":
+                    return
             output_config_value = data.get("output_config")
             if output_config_value is None:
                 output_config: Dict[str, object] = {}
@@ -218,8 +233,6 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
         requested_effort: str,
     ) -> None:
         """Make an allowed effort explicit when adaptive thinking would otherwise choose it."""
-        if call_type not in ANTHROPIC_MESSAGE_CALL_TYPES:
-            return
         thinking_value = data.get("thinking")
         if not isinstance(thinking_value, dict):
             return
@@ -234,7 +247,7 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
             output_config = cast(Dict[str, object], output_config_value)
         else:
             self._raise("output_config must be an object")
-        output_config.setdefault("effort", requested_effort)
+        output_config["effort"] = requested_effort
 
     async def async_pre_call_hook(
         self,
