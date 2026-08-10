@@ -158,6 +158,25 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
             output_item["arguments"] = redacted_str
 
 
+def redacted_mcp_tool_call_metadata(metadata: object, redacted_str: str) -> object:
+    """MCP tool arguments and results are user content, and they ride in
+    `metadata.mcp_tool_call_metadata` rather than in `messages` / `response`,
+    so every integration that logs metadata exports them unless redacted here.
+    """
+    if not isinstance(metadata, dict):
+        return metadata
+
+    mcp_tool_call: Final = metadata.get("mcp_tool_call_metadata")
+    if not isinstance(mcp_tool_call, dict):
+        return metadata
+
+    redacted_call: Final = {
+        **mcp_tool_call,
+        **{key: redacted_str for key in ("arguments", "result") if mcp_tool_call.get(key) is not None},
+    }
+    return {**metadata, "mcp_tool_call_metadata": redacted_call}
+
+
 def _redact_standard_logging_object(model_call_details: dict):
     """Redact messages and response inside standard_logging_object if present."""
     standard_logging_object: Final = model_call_details.get("standard_logging_object")
@@ -168,6 +187,10 @@ def _redact_standard_logging_object(model_call_details: dict):
 
     if standard_logging_object.get("messages") is not None:
         standard_logging_object["messages"] = [{"role": "user", "content": redacted_str}]
+
+    standard_logging_object["metadata"] = redacted_mcp_tool_call_metadata(
+        standard_logging_object.get("metadata"), redacted_str
+    )
 
     response: Final = standard_logging_object.get("response")
     if response is not None:
