@@ -3,6 +3,7 @@
 from typing import TYPE_CHECKING, Dict, List, Mapping, NoReturn, Optional, Type, cast
 
 from litellm.caching import DualCache
+from litellm.constants import DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.reasoning_effort_utils import (
@@ -128,6 +129,8 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
             budget_tokens = thinking["budget_tokens"]
             if isinstance(budget_tokens, bool) or not isinstance(budget_tokens, int) or budget_tokens < 0:
                 self._raise("thinking.budget_tokens must be a non-negative integer")
+            if budget_tokens >= DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET:
+                return "xhigh"
             return reasoning_effort_from_thinking_budget(budget_tokens)
         if thinking_type == "adaptive":
             return None

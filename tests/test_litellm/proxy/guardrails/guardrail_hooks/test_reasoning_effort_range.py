@@ -147,6 +147,22 @@ async def test_materializes_scalar_effort_for_adaptive_thinking() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rejects_xhigh_legacy_budget_under_high_ceiling() -> None:
+    guardrail = make_guardrail(max_effort="high", default_effort="high")
+
+    with pytest.raises(Exception):
+        await guardrail.async_pre_call_hook(
+            None,
+            None,
+            {
+                "model": "gpt-5.6-sol",
+                "thinking": {"type": "enabled", "budget_tokens": 8192},
+            },
+            "anthropic_messages",
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("reasoning_effort", [None, "low"])
 async def test_rejects_null_adaptive_output_effort(reasoning_effort: str | None) -> None:
     guardrail: ReasoningEffortRangeGuardrail = make_guardrail()
