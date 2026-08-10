@@ -144,6 +144,70 @@ async def test_defaults_passthrough_adaptive_thinking_without_explicit_effort() 
 
 
 @pytest.mark.asyncio
+async def test_maps_adaptive_minimal_effort_to_anthropic_low() -> None:
+    guardrail: ReasoningEffortRangeGuardrail = make_guardrail()
+    data = {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "minimal",
+        "thinking": {"type": "adaptive"},
+    }
+
+    result = await guardrail.async_pre_call_hook(None, None, data, "completion")
+
+    assert result["output_config"] == {"effort": "low"}
+
+
+@pytest.mark.asyncio
+async def test_adaptive_none_disables_anthropic_thinking() -> None:
+    guardrail: ReasoningEffortRangeGuardrail = make_guardrail()
+    data = {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "none",
+        "thinking": {"type": "adaptive"},
+    }
+
+    result = await guardrail.async_pre_call_hook(None, None, data, "completion")
+
+    assert result["thinking"] == {"type": "disabled"}
+    assert result["output_config"] == {}
+
+
+@pytest.mark.asyncio
+async def test_rejects_adaptive_minimal_when_anthropic_low_exceeds_ceiling() -> None:
+    guardrail: ReasoningEffortRangeGuardrail = make_guardrail(max_effort="minimal", default_effort="minimal")
+
+    with pytest.raises(Exception):
+        await guardrail.async_pre_call_hook(
+            None,
+            None,
+            {
+                "model": "gpt-5.6-sol",
+                "reasoning_effort": "minimal",
+                "thinking": {"type": "adaptive"},
+            },
+            "completion",
+        )
+
+
+@pytest.mark.parametrize("effort", ["none", "minimal"])
+@pytest.mark.asyncio
+async def test_rejects_unsupported_native_output_config_effort(effort: str) -> None:
+    guardrail: ReasoningEffortRangeGuardrail = make_guardrail()
+
+    with pytest.raises(Exception):
+        await guardrail.async_pre_call_hook(
+            None,
+            None,
+            {
+                "model": "gpt-5.6-sol",
+                "thinking": {"type": "adaptive"},
+                "output_config": {"effort": effort},
+            },
+            "completion",
+        )
+
+
+@pytest.mark.asyncio
 async def test_rejects_passthrough_null_adaptive_effort() -> None:
     guardrail: ReasoningEffortRangeGuardrail = make_guardrail()
 
