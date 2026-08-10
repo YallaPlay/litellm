@@ -48,3 +48,11 @@ jobs:
         env:
           IMAGE_TAG: ${{ inputs.image_tag }}
         run: docker push "$IMAGE_TAG"
+
+      - name: Make package publicly pullable
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh api --method PATCH
+          "/orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/litellm"
+          -f visibility=public
