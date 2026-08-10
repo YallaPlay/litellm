@@ -124,4 +124,27 @@ describe("EmailSettings", () => {
 
     expect(screen.getByText("email event settings")).toBeInTheDocument();
   });
+
+  it("toggles credential visibility when eye icon is clicked", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} />);
+
+    const passwordInput = inputNamed("SMTP_PASSWORD");
+    expect(passwordInput).toHaveAttribute("type", "password");
+
+    const toggleButtons = screen.getAllByLabelText("Show credential");
+    const passwordToggle = toggleButtons.find((btn) => {
+      const input = btn.closest("div")?.querySelector('input[name="SMTP_PASSWORD"]');
+      return input != null;
+    });
+
+    expect(passwordToggle).toBeInTheDocument();
+    await user.click(passwordToggle!);
+
+    expect(passwordInput).toHaveAttribute("type", "text");
+    expect(screen.getByLabelText("Hide credential")).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Hide credential"));
+    expect(passwordInput).toHaveAttribute("type", "password");
+  });
 });
