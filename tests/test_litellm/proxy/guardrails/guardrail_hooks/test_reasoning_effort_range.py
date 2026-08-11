@@ -61,6 +61,26 @@ async def test_clamps_effort_below_range() -> None:
 
 
 @pytest.mark.asyncio
+async def test_clamps_to_boundary_not_default() -> None:
+    guardrail = make_guardrail(min_effort="low", max_effort="high", default_effort="low")
+    data = {"model": "gpt-5.6-sol", "reasoning_effort": "xhigh"}
+
+    result = await guardrail.async_pre_call_hook(None, None, data, "acompletion")
+
+    assert result["reasoning_effort"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_default_alias_uses_configured_default() -> None:
+    guardrail = make_guardrail(min_effort="low", max_effort="max", default_effort="low")
+    data = {"model": "gpt-5.6-sol", "reasoning_effort": "default"}
+
+    result = await guardrail.async_pre_call_hook(None, None, data, "acompletion")
+
+    assert result["reasoning_effort"] == "low"
+
+
+@pytest.mark.asyncio
 async def test_defaults_omitted_chat_effort() -> None:
     guardrail = make_guardrail()
     data = {"model": "gpt-5.6-sol"}
@@ -118,10 +138,10 @@ async def test_clamps_anthropic_budget_and_adaptive_effort_above_range() -> None
     budget_result = await guardrail.async_pre_call_hook(None, None, budget, "anthropic_messages")
     adaptive_result = await guardrail.async_pre_call_hook(None, None, adaptive, "anthropic_messages")
 
-    assert budget_result["thinking"] == {"type": "adaptive"}
-    assert budget_result["output_config"] == {"effort": "medium"}
-    assert adaptive_result["thinking"] == {"type": "adaptive"}
-    assert adaptive_result["output_config"] == {"effort": "medium"}
+    assert budget_result["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+    assert "output_config" not in budget_result
+    assert adaptive_result["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+    assert "output_config" not in adaptive_result
 
 
 @pytest.mark.asyncio
@@ -131,11 +151,8 @@ async def test_defaults_omitted_anthropic_effort() -> None:
 
     result = await guardrail.async_pre_call_hook(None, None, data, "anthropic_messages")
 
-    assert result["thinking"] == {"type": "adaptive"}
-    assert result["output_config"] == {
-        "effort": "medium",
-        "format": {"type": "json_schema"},
-    }
+    assert result["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+    assert result["output_config"] == {"format": {"type": "json_schema"}}
 
 
 @pytest.mark.asyncio
@@ -145,8 +162,8 @@ async def test_defaults_adaptive_thinking_without_explicit_effort() -> None:
 
     result = await guardrail.async_pre_call_hook(None, None, data, "anthropic_messages")
 
-    assert result["thinking"] == {"type": "adaptive"}
-    assert result["output_config"] == {"effort": "medium"}
+    assert result["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+    assert "output_config" not in result
 
 
 @pytest.mark.asyncio
@@ -156,8 +173,8 @@ async def test_defaults_passthrough_adaptive_thinking_without_explicit_effort() 
 
     result = await guardrail.async_pre_call_hook(None, None, data, "pass_through_endpoint")
 
-    assert result["thinking"] == {"type": "adaptive"}
-    assert result["output_config"] == {"effort": "medium"}
+    assert result["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+    assert "output_config" not in result
 
 
 @pytest.mark.asyncio
@@ -171,7 +188,8 @@ async def test_maps_adaptive_minimal_effort_to_anthropic_low() -> None:
 
     result = await guardrail.async_pre_call_hook(None, None, data, "completion")
 
-    assert result["output_config"] == {"effort": "low"}
+    assert result["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert "output_config" not in result
 
 
 @pytest.mark.asyncio
@@ -186,7 +204,7 @@ async def test_adaptive_none_disables_anthropic_thinking() -> None:
     result = await guardrail.async_pre_call_hook(None, None, data, "completion")
 
     assert result["thinking"] == {"type": "disabled"}
-    assert result["output_config"] == {}
+    assert "output_config" not in result
 
 
 @pytest.mark.asyncio
@@ -204,7 +222,8 @@ async def test_maps_adaptive_minimal_to_closest_native_effort() -> None:
         "completion",
     )
 
-    assert result["output_config"] == {"effort": "low"}
+    assert result["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert "output_config" not in result
 
 
 @pytest.mark.parametrize("effort", ["none", "minimal"])
@@ -253,7 +272,8 @@ async def test_materializes_scalar_effort_for_adaptive_thinking() -> None:
 
     result = await guardrail.async_pre_call_hook(None, None, data, "anthropic_messages")
 
-    assert result["output_config"] == {"effort": "low"}
+    assert result["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert "output_config" not in result
 
 
 @pytest.mark.asyncio
@@ -270,8 +290,43 @@ async def test_clamps_xhigh_legacy_budget_to_high_ceiling() -> None:
         "anthropic_messages",
     )
 
-    assert result["thinking"] == {"type": "adaptive"}
-    assert result["output_config"] == {"effort": "high"}
+    assert result["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+    assert "output_config" not in result
+
+
+@pytest.mark.asyncio
+async def test_preserves_in_range_legacy_budget() -> None:
+    guardrail = make_guardrail(max_effort="high", default_effort="medium")
+    data = {
+        "model": "gpt-5.6-sol",
+        "thinking": {"type": "enabled", "budget_tokens": 4096},
+    }
+
+    result = await guardrail.async_pre_call_hook(None, None, data, "anthropic_messages")
+
+    assert result["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+
+
+@pytest.mark.asyncio
+async def test_clamped_budget_stays_bounded_on_nonadaptive_anthropic_model() -> None:
+    from litellm.utils import get_optional_params
+
+    model = "claude-sonnet-4-5-20250929"
+    guardrail = make_guardrail(model=model, max_effort="low", default_effort="low")
+    data = {
+        "model": model,
+        "thinking": {"type": "enabled", "budget_tokens": 8192},
+    }
+
+    result = await guardrail.async_pre_call_hook(None, None, data, "anthropic_messages")
+    optional_params = get_optional_params(
+        model=model,
+        custom_llm_provider="anthropic",
+        thinking=result["thinking"],
+    )
+
+    assert result["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 1024}
 
 
 @pytest.mark.asyncio
@@ -347,7 +402,7 @@ async def test_fails_closed_on_conflicting_or_malformed_values() -> None:
 
 
 @pytest.mark.asyncio
-async def test_collapses_conflicting_values_when_both_clamp_to_same_boundary() -> None:
+async def test_rejects_conflicting_values_even_when_both_would_clamp_to_same_boundary() -> None:
     guardrail = make_guardrail()
     data = {
         "model": "gpt-5.6-sol",
@@ -355,10 +410,8 @@ async def test_collapses_conflicting_values_when_both_clamp_to_same_boundary() -
         "reasoning": {"effort": "xhigh"},
     }
 
-    result = await guardrail.async_pre_call_hook(None, None, data, "aresponses")
-
-    assert result["reasoning_effort"] == "medium"
-    assert result["reasoning"] == {"effort": "medium"}
+    with pytest.raises(Exception, match="conflicting reasoning effort values"):
+        await guardrail.async_pre_call_hook(None, None, data, "aresponses")
 
 
 @pytest.mark.asyncio

@@ -1,9 +1,14 @@
 """Guardrail that enforces an inclusive reasoning-effort range per model."""
 
-from typing import TYPE_CHECKING, Dict, List, Mapping, NoReturn, Optional, Type, cast
+from typing import TYPE_CHECKING, Dict, List, Mapping, NoReturn, Optional, Tuple, Type, cast
 
 from litellm.caching import DualCache
-from litellm.constants import DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET
+from litellm.constants import (
+    DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+)
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.reasoning_effort_utils import (
@@ -30,6 +35,13 @@ REQUEST_EFFORT_RANK: Dict[str, int] = {
 }
 EFFORT_NAMES = ", ".join(REQUEST_EFFORT_RANK)
 ANTHROPIC_OUTPUT_CONFIG_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
+ANTHROPIC_BUDGET_BY_EFFORT = {
+    "minimal": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    "low": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+    "medium": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+    "high": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+    "xhigh": DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+}
 ANTHROPIC_MESSAGE_CALL_TYPES = frozenset({"anthropic_messages", "aanthropic_messages"})
 RESPONSES_CALL_TYPES = frozenset({"responses", "aresponses", "_aresponses_websocket"})
 
@@ -160,7 +172,7 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
         output_config = data.get("output_config")
         return isinstance(output_config, Mapping) and "effort" in output_config
 
-    def _requested_effort(self, data: Dict[str, object], call_type: CallTypesLiteral) -> Optional[str]:
+    def _requested_effort(self, data: Dict[str, object], call_type: CallTypesLiteral) -> Optional[Tuple[str, str]]:
         values: List[str] = []
         if "reasoning_effort" in data:
             self._append_effort(values, data["reasoning_effort"], "reasoning_effort")
@@ -184,10 +196,18 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
 
         if not values:
             return None
-        clamped_values = [self._clamp_effort(value) for value in values]
-        if len(set(clamped_values)) != 1:
+        if len(set(values)) != 1:
             self._raise("conflicting reasoning effort values")
-        return clamped_values[0]
+        requested_effort = values[0]
+        resolved_effort = self._resolve_alias(requested_effort)
+        return requested_effort, self._clamp_effort(resolved_effort)
+
+    def _resolve_alias(self, effort: str) -> str:
+        if effort == "default":
+            return self.default_effort
+        if effort == "max":
+            return "xhigh"
+        return effort
 
     def _clamp_effort(self, effort: str) -> str:
         rank = REQUEST_EFFORT_RANK[effort]
@@ -199,15 +219,6 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
 
     def _set_default_effort(self, data: Dict[str, object], call_type: CallTypesLiteral) -> None:
         if self._uses_anthropic_effort_shape(data, call_type):
-            thinking_value = data.get("thinking")
-            if thinking_value is None:
-                data["thinking"] = {"type": "adaptive"}
-            elif not isinstance(thinking_value, dict):
-                self._raise("thinking must be an object")
-            else:
-                thinking = cast(Mapping[str, object], thinking_value)
-                if thinking.get("type") != "adaptive":
-                    return
             self._set_anthropic_effort(data, self.default_effort)
             return
 
@@ -232,20 +243,22 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
 
     def _set_anthropic_effort(self, data: Dict[str, object], requested_effort: str) -> None:
         output_config_value = data.get("output_config")
-        if output_config_value is None:
-            output_config: Dict[str, object] = {}
-            data["output_config"] = output_config
-        elif isinstance(output_config_value, dict):
+        if isinstance(output_config_value, dict):
             output_config = cast(Dict[str, object], output_config_value)
-        else:
+            output_config.pop("effort", None)
+            if not output_config:
+                data.pop("output_config", None)
+        elif output_config_value is not None:
             self._raise("output_config must be an object")
 
         if requested_effort == "none":
             data["thinking"] = {"type": "disabled"}
-            output_config.pop("effort", None)
         else:
-            data["thinking"] = {"type": "adaptive"}
-            output_config["effort"] = "low" if requested_effort == "minimal" else requested_effort
+            native_effort = "xhigh" if requested_effort == "max" else requested_effort
+            data["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": ANTHROPIC_BUDGET_BY_EFFORT[native_effort],
+            }
         data.pop("reasoning_effort", None)
         data.pop("reasoning", None)
 
@@ -253,10 +266,18 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
         self,
         data: Dict[str, object],
         call_type: CallTypesLiteral,
+        original_effort: str,
         requested_effort: str,
     ) -> None:
         if self._uses_anthropic_effort_shape(data, call_type):
-            self._set_anthropic_effort(data, requested_effort)
+            thinking = data.get("thinking")
+            output_config_effort = self._output_config_effort(data)
+            needs_materialization = False
+            if isinstance(thinking, dict):
+                thinking_mapping = cast(Mapping[str, object], thinking)
+                needs_materialization = thinking_mapping.get("type") == "adaptive" and output_config_effort is None
+            if original_effort != requested_effort or needs_materialization:
+                self._set_anthropic_effort(data, requested_effort)
             return
 
         updated = False
@@ -286,10 +307,11 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
         if request_model != self.model:
             self._raise(f"guardrail is configured for model '{self.model}', not '{request_model}'")
 
-        requested_effort = self._requested_effort(data, call_type)
-        if requested_effort is None:
+        requested_efforts = self._requested_effort(data, call_type)
+        if requested_efforts is None:
             self._set_default_effort(data, call_type)
             return data
 
-        self._set_requested_effort(data, call_type, requested_effort)
+        original_effort, requested_effort = requested_efforts
+        self._set_requested_effort(data, call_type, original_effort, requested_effort)
         return data
