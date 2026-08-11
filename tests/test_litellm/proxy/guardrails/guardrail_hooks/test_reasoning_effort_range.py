@@ -41,16 +41,23 @@ async def test_allows_effort_inside_range(effort: str) -> None:
 
 @pytest.mark.parametrize("effort", ["high", "xhigh", "max", "default"])
 @pytest.mark.asyncio
-async def test_rejects_effort_above_range(effort: str) -> None:
+async def test_clamps_effort_above_range(effort: str) -> None:
     guardrail = make_guardrail()
+    data = {"model": "gpt-5.6-sol", "reasoning_effort": effort}
 
-    with pytest.raises(Exception, match="maximum allowed is medium"):
-        await guardrail.async_pre_call_hook(
-            None,
-            None,
-            {"model": "gpt-5.6-sol", "reasoning_effort": effort},
-            "acompletion",
-        )
+    result = await guardrail.async_pre_call_hook(None, None, data, "acompletion")
+
+    assert result["reasoning_effort"] == "medium"
+
+
+@pytest.mark.asyncio
+async def test_clamps_effort_below_range() -> None:
+    guardrail = make_guardrail(min_effort="low")
+    data = {"model": "gpt-5.6-sol", "reasoning_effort": "none"}
+
+    result = await guardrail.async_pre_call_hook(None, None, data, "acompletion")
+
+    assert result["reasoning_effort"] == "low"
 
 
 @pytest.mark.asyncio
@@ -80,31 +87,41 @@ async def test_handles_structured_chat_and_responses_effort() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rejects_anthropic_budget_and_adaptive_effort_above_range() -> None:
+async def test_clamps_structured_chat_and_responses_effort() -> None:
     guardrail = make_guardrail()
+    structured = {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": {"effort": "high", "summary": "detailed"},
+    }
+    responses = {"model": "gpt-5.6-sol", "reasoning": {"effort": "xhigh"}}
 
-    with pytest.raises(Exception, match="maximum allowed is medium"):
-        await guardrail.async_pre_call_hook(
-            None,
-            None,
-            {
-                "model": "gpt-5.6-sol",
-                "thinking": {"type": "enabled", "budget_tokens": 4096},
-            },
-            "anthropic_messages",
-        )
+    structured_result = await guardrail.async_pre_call_hook(None, None, structured, "acompletion")
+    responses_result = await guardrail.async_pre_call_hook(None, None, responses, "aresponses")
 
-    with pytest.raises(Exception, match="maximum allowed is medium"):
-        await guardrail.async_pre_call_hook(
-            None,
-            None,
-            {
-                "model": "gpt-5.6-sol",
-                "thinking": {"type": "adaptive"},
-                "output_config": {"effort": "xhigh"},
-            },
-            "anthropic_messages",
-        )
+    assert structured_result["reasoning_effort"] == {"effort": "medium", "summary": "detailed"}
+    assert responses_result["reasoning"] == {"effort": "medium"}
+
+
+@pytest.mark.asyncio
+async def test_clamps_anthropic_budget_and_adaptive_effort_above_range() -> None:
+    guardrail = make_guardrail()
+    budget = {
+        "model": "gpt-5.6-sol",
+        "thinking": {"type": "enabled", "budget_tokens": 4096},
+    }
+    adaptive = {
+        "model": "gpt-5.6-sol",
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "xhigh"},
+    }
+
+    budget_result = await guardrail.async_pre_call_hook(None, None, budget, "anthropic_messages")
+    adaptive_result = await guardrail.async_pre_call_hook(None, None, adaptive, "anthropic_messages")
+
+    assert budget_result["thinking"] == {"type": "adaptive"}
+    assert budget_result["output_config"] == {"effort": "medium"}
+    assert adaptive_result["thinking"] == {"type": "adaptive"}
+    assert adaptive_result["output_config"] == {"effort": "medium"}
 
 
 @pytest.mark.asyncio
@@ -173,20 +190,21 @@ async def test_adaptive_none_disables_anthropic_thinking() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rejects_adaptive_minimal_when_anthropic_low_exceeds_ceiling() -> None:
+async def test_maps_adaptive_minimal_to_closest_native_effort() -> None:
     guardrail: ReasoningEffortRangeGuardrail = make_guardrail(max_effort="minimal", default_effort="minimal")
 
-    with pytest.raises(Exception):
-        await guardrail.async_pre_call_hook(
-            None,
-            None,
-            {
-                "model": "gpt-5.6-sol",
-                "reasoning_effort": "minimal",
-                "thinking": {"type": "adaptive"},
-            },
-            "completion",
-        )
+    result = await guardrail.async_pre_call_hook(
+        None,
+        None,
+        {
+            "model": "gpt-5.6-sol",
+            "reasoning_effort": "minimal",
+            "thinking": {"type": "adaptive"},
+        },
+        "completion",
+    )
+
+    assert result["output_config"] == {"effort": "low"}
 
 
 @pytest.mark.parametrize("effort", ["none", "minimal"])
@@ -239,19 +257,21 @@ async def test_materializes_scalar_effort_for_adaptive_thinking() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rejects_xhigh_legacy_budget_under_high_ceiling() -> None:
+async def test_clamps_xhigh_legacy_budget_to_high_ceiling() -> None:
     guardrail = make_guardrail(max_effort="high", default_effort="high")
 
-    with pytest.raises(Exception):
-        await guardrail.async_pre_call_hook(
-            None,
-            None,
-            {
-                "model": "gpt-5.6-sol",
-                "thinking": {"type": "enabled", "budget_tokens": 8192},
-            },
-            "anthropic_messages",
-        )
+    result = await guardrail.async_pre_call_hook(
+        None,
+        None,
+        {
+            "model": "gpt-5.6-sol",
+            "thinking": {"type": "enabled", "budget_tokens": 8192},
+        },
+        "anthropic_messages",
+    )
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["output_config"] == {"effort": "high"}
 
 
 @pytest.mark.asyncio
@@ -324,6 +344,21 @@ async def test_fails_closed_on_conflicting_or_malformed_values() -> None:
             },
             "anthropic_messages",
         )
+
+
+@pytest.mark.asyncio
+async def test_collapses_conflicting_values_when_both_clamp_to_same_boundary() -> None:
+    guardrail = make_guardrail()
+    data = {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "high",
+        "reasoning": {"effort": "xhigh"},
+    }
+
+    result = await guardrail.async_pre_call_hook(None, None, data, "aresponses")
+
+    assert result["reasoning_effort"] == "medium"
+    assert result["reasoning"] == {"effort": "medium"}
 
 
 @pytest.mark.asyncio

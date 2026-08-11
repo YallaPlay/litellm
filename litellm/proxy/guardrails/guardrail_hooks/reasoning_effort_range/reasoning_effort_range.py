@@ -184,9 +184,18 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
 
         if not values:
             return None
-        if len(set(values)) != 1:
+        clamped_values = [self._clamp_effort(value) for value in values]
+        if len(set(clamped_values)) != 1:
             self._raise("conflicting reasoning effort values")
-        return values[0]
+        return clamped_values[0]
+
+    def _clamp_effort(self, effort: str) -> str:
+        rank = REQUEST_EFFORT_RANK[effort]
+        if rank < EFFORT_RANK[self.min_effort]:
+            return self.min_effort
+        if rank > EFFORT_RANK[self.max_effort]:
+            return self.max_effort
+        return effort
 
     def _set_default_effort(self, data: Dict[str, object], call_type: CallTypesLiteral) -> None:
         if self._uses_anthropic_effort_shape(data, call_type):
@@ -199,7 +208,7 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
                 thinking = cast(Mapping[str, object], thinking_value)
                 if thinking.get("type") != "adaptive":
                     return
-            self._set_anthropic_adaptive_effort(data, self.default_effort)
+            self._set_anthropic_effort(data, self.default_effort)
             return
 
         reasoning_effort = data.get("reasoning_effort")
@@ -221,7 +230,7 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
 
         data["reasoning_effort"] = self.default_effort
 
-    def _set_anthropic_adaptive_effort(self, data: Dict[str, object], requested_effort: str) -> None:
+    def _set_anthropic_effort(self, data: Dict[str, object], requested_effort: str) -> None:
         output_config_value = data.get("output_config")
         if output_config_value is None:
             output_config: Dict[str, object] = {}
@@ -234,29 +243,37 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
         if requested_effort == "none":
             data["thinking"] = {"type": "disabled"}
             output_config.pop("effort", None)
-            return
+        else:
+            data["thinking"] = {"type": "adaptive"}
+            output_config["effort"] = "low" if requested_effort == "minimal" else requested_effort
+        data.pop("reasoning_effort", None)
+        data.pop("reasoning", None)
 
-        output_effort = "low" if requested_effort == "minimal" else requested_effort
-        if EFFORT_RANK[output_effort] > EFFORT_RANK[self.max_effort]:
-            self._raise(
-                f"reasoning effort '{requested_effort}' maps to Anthropic output effort "
-                f"'{output_effort}', above maximum allowed {self.max_effort}"
-            )
-        output_config["effort"] = output_effort
-
-    def _set_adaptive_effort(
+    def _set_requested_effort(
         self,
         data: Dict[str, object],
+        call_type: CallTypesLiteral,
         requested_effort: str,
     ) -> None:
-        """Make an allowed effort explicit when adaptive thinking would otherwise choose it."""
-        thinking_value = data.get("thinking")
-        if not isinstance(thinking_value, dict):
+        if self._uses_anthropic_effort_shape(data, call_type):
+            self._set_anthropic_effort(data, requested_effort)
             return
-        thinking = cast(Mapping[str, object], thinking_value)
-        if thinking.get("type") != "adaptive":
-            return
-        self._set_anthropic_adaptive_effort(data, requested_effort)
+
+        updated = False
+        reasoning_effort = data.get("reasoning_effort")
+        if isinstance(reasoning_effort, dict):
+            cast(Dict[str, object], reasoning_effort)["effort"] = requested_effort
+            updated = True
+        elif "reasoning_effort" in data:
+            data["reasoning_effort"] = requested_effort
+            updated = True
+
+        reasoning_value = data.get("reasoning")
+        if isinstance(reasoning_value, dict):
+            cast(Dict[str, object], reasoning_value)["effort"] = requested_effort
+            updated = True
+        if not updated:
+            self._set_default_effort(data, call_type)
 
     async def async_pre_call_hook(
         self,
@@ -274,10 +291,5 @@ class ReasoningEffortRangeGuardrail(CustomGuardrail):
             self._set_default_effort(data, call_type)
             return data
 
-        rank = REQUEST_EFFORT_RANK[requested_effort]
-        if rank < EFFORT_RANK[self.min_effort]:
-            self._raise(f"reasoning effort '{requested_effort}' is not allowed; minimum allowed is {self.min_effort}")
-        if rank > EFFORT_RANK[self.max_effort]:
-            self._raise(f"reasoning effort '{requested_effort}' is not allowed; maximum allowed is {self.max_effort}")
-        self._set_adaptive_effort(data, requested_effort)
+        self._set_requested_effort(data, call_type, requested_effort)
         return data
