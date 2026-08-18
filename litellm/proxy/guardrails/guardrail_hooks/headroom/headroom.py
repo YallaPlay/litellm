@@ -46,6 +46,11 @@ BYPASS_HEADER = "x-headroom-bypass"
 HEADROOM_RETRIEVE_TOOL_NAME = "headroom_retrieve"
 _HASH_PATTERN = re.compile(r"hash=([a-f0-9]{24})")
 _HASH_CACHE_TTL_SECONDS = 15 * 60
+_HEADROOM_CONNECT_TIMEOUT_SECONDS = 5.0
+# Compression runs before the first byte reaches the client, so a stalled
+# Headroom service holds the whole request open. Cap it well below the common
+# 100-120s edge/proxy read timeouts; `fail_open` then forwards uncompressed.
+_DEFAULT_HEADROOM_TIMEOUT = httpx.Timeout(60.0, connect=_HEADROOM_CONNECT_TIMEOUT_SECONDS)
 
 
 def _is_str_object_dict(value: object) -> TypeGuard[dict[str, object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
@@ -286,6 +291,7 @@ class HeadroomGuardrail(CustomGuardrail):
         event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
         default_on: bool = False,
         unreachable_fallback: str | None = None,
+        timeout: float | None = None,
     ):
         self.headroom_api_base = (api_base or get_secret_str("HEADROOM_API_BASE") or "").rstrip("/")
         if not self.headroom_api_base:
@@ -297,6 +303,11 @@ class HeadroomGuardrail(CustomGuardrail):
         self.headroom_model = model
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
             "fail_open" if unreachable_fallback == "fail_open" else "fail_closed"
+        )
+        self.timeout: httpx.Timeout = (
+            _DEFAULT_HEADROOM_TIMEOUT
+            if timeout is None
+            else httpx.Timeout(timeout, connect=min(timeout, _HEADROOM_CONNECT_TIMEOUT_SECONDS))
         )
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
@@ -362,6 +373,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 url=f"{self.headroom_api_base}/v1/compress",
                 json=payload,
                 headers=self._request_headers(),
+                timeout=self.timeout,
             )
         except httpx.HTTPStatusError as e:
             return (
@@ -496,6 +508,7 @@ class HeadroomGuardrail(CustomGuardrail):
                 url=f"{self.headroom_api_base}/v1/retrieve/{hash_value}",
                 params=params,
                 headers=self._request_headers(),
+                timeout=self.timeout,
             )
         except (httpx.ConnectError, httpx.TimeoutException, httpx.TransportError, litellm.Timeout) as e:
             verbose_proxy_logger.warning("Headroom: retrieve failed for hash=%s: %s", hash_value, e)

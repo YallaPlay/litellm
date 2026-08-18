@@ -1782,3 +1782,113 @@ async def test_fail_open_returns_original_parts_shapes():
 
     messages = result["structured_messages"]
     assert [m["content"] for m in messages] == [m["content"] for m in PARTS_MESSAGES]
+
+
+@pytest.mark.asyncio
+async def test_compress_uses_default_timeout_when_unset():
+    guardrail = _make_guardrail()
+    inputs = GenericGuardrailAPIInputs(
+        texts=["A" * 5000],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=_make_compress_response(COMPRESSED_MESSAGES),
+    ) as mock_post:
+        await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={"model": "gpt-4o"},
+            input_type="request",
+        )
+
+    sent = mock_post.call_args.kwargs["timeout"]
+    assert sent.read == 60.0
+    assert sent.connect == 5.0
+
+
+@pytest.mark.asyncio
+async def test_compress_honors_configured_timeout():
+    guardrail = _make_guardrail(timeout=20)
+    inputs = GenericGuardrailAPIInputs(
+        texts=["A" * 5000],
+        structured_messages=ORIGINAL_MESSAGES,
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=_make_compress_response(COMPRESSED_MESSAGES),
+    ) as mock_post:
+        await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={"model": "gpt-4o"},
+            input_type="request",
+        )
+
+    sent = mock_post.call_args.kwargs["timeout"]
+    assert sent.read == 20.0
+    assert sent.connect == 5.0
+
+
+def test_configured_timeout_below_connect_default_clamps_connect():
+    guardrail = _make_guardrail(timeout=2)
+    assert guardrail.timeout.read == 2.0
+    assert guardrail.timeout.connect == 2.0
+
+
+@pytest.mark.asyncio
+async def test_compress_timeout_fails_open_uncompressed():
+    guardrail = _make_guardrail(unreachable_fallback="fail_open", timeout=20)
+    inputs = GenericGuardrailAPIInputs(
+        texts=["A" * 5000],
+        structured_messages=list(ORIGINAL_MESSAGES),
+    )
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        side_effect=httpx.ReadTimeout("compress stalled"),
+    ):
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={"model": "gpt-4o"},
+            input_type="request",
+        )
+
+    assert result["structured_messages"] == ORIGINAL_MESSAGES
+
+
+@pytest.mark.asyncio
+async def test_retrieve_uses_configured_timeout():
+    guardrail = _make_guardrail(timeout=20)
+
+    with patch.object(
+        guardrail.async_handler,
+        "get",
+        new_callable=AsyncMock,
+        return_value=_make_retrieve_response("restored content"),
+    ) as mock_get:
+        await guardrail._call_retrieve("b573993006976af767214fac")
+
+    assert mock_get.call_args.kwargs["timeout"].read == 20.0
+
+
+def test_initializer_forwards_timeout_from_litellm_params():
+    from litellm.proxy.guardrails.guardrail_hooks.headroom import initialize_guardrail
+    from litellm.types.guardrails import LitellmParams
+
+    params = LitellmParams(
+        guardrail="headroom",
+        mode="pre_call",
+        api_base=FAKE_API_BASE,
+        api_key=FAKE_API_KEY,
+        timeout="25",
+    )
+    callback = initialize_guardrail(params, {"guardrail_name": "headroom-compress"})
+
+    assert callback.timeout.read == 25.0
