@@ -1,6 +1,6 @@
 """Configuration model for the reasoning-effort range guardrail."""
 
-from typing import Literal, Optional
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 from typing_extensions import Self
@@ -33,7 +33,7 @@ class ReasoningEffortRangeGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
     max_effort: ReasoningEffort = Field(
         description="Maximum accepted reasoning effort.",
     )
-    default_effort: Optional[ReasoningEffort] = Field(
+    default_effort: ReasoningEffort | None = Field(
         default=None,
         description="Effort injected when omitted. Defaults to max_effort.",
     )
